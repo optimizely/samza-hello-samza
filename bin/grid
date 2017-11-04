@@ -21,7 +21,7 @@
 
 if [ -z "$JAVA_HOME" ]; then
   if [ -x /usr/libexec/java_home ]; then
-    export JAVA_HOME="$(/usr/libexec/java_home)"
+    export JAVA_HOME="$(/usr/libexec/java_home -v 1.8.0_45)"
   else
     echo "JAVA_HOME not set. Exiting."
     exit 1
@@ -35,9 +35,12 @@ DOWNLOAD_CACHE_DIR=$HOME/.samza/download
 COMMAND=$1
 SYSTEM=$2
 
-DOWNLOAD_KAFKA=http://www.us.apache.org/dist/kafka/0.10.1.1/kafka_2.11-0.10.1.1.tgz
+DOWNLOAD_KAFKA=http://www.us.apache.org/dist/kafka/0.8.2.0/kafka_2.9.1-0.8.2.0.tgz
 DOWNLOAD_YARN=https://archive.apache.org/dist/hadoop/common/hadoop-2.6.1/hadoop-2.6.1.tar.gz
 DOWNLOAD_ZOOKEEPER=http://archive.apache.org/dist/zookeeper/zookeeper-3.4.3/zookeeper-3.4.3.tar.gz
+DOWNLOAD_FLUME=http://archive.cloudera.com/cdh5/cdh/5/flume-ng-1.5.0-cdh5.4.4.tar.gz
+DOWNLOAD_REDIS=http://download.redis.io/releases/redis-4.0.0.tar.gz
+OPTIMIZELY_FLUME_VERSION=2.3.22
 
 SERVICE_WAIT_TIMEOUT_SEC=20
 ZOOKEEPER_PORT=2181
@@ -50,6 +53,7 @@ bootstrap() {
   stop_all
   rm -rf "$DEPLOY_ROOT_DIR"
   mkdir "$DEPLOY_ROOT_DIR"
+  mkdir -p "$DOWNLOAD_CACHE_DIR"
   install_all
   start_all
   exit 0
@@ -66,32 +70,20 @@ standalone() {
 }
 
 install_all() {
-  $DIR/grid install samza
   $DIR/grid install zookeeper
   $DIR/grid install yarn
   $DIR/grid install kafka
+  $DIR/grid install flume
+  $DIR/grid install redis
+  $DIR/grid install backend-webtier
 }
 
 install_all_without_yarn() {
-  $DIR/grid install samza
   $DIR/grid install zookeeper
   $DIR/grid install kafka
-}
-
-install_samza() {
-  mkdir -p "$DEPLOY_ROOT_DIR"
-  if [ -d "$DOWNLOAD_CACHE_DIR/samza/.git" ]; then
-    pushd "$DOWNLOAD_CACHE_DIR/samza"
-    git fetch origin
-    git reset --hard origin/master
-  else
-    mkdir -p $DOWNLOAD_CACHE_DIR
-    pushd $DOWNLOAD_CACHE_DIR
-    git clone git://git.apache.org/samza.git
-    cd samza
-  fi
-  ./gradlew -PscalaVersion=2.11 clean publishToMavenLocal
-  popd
+  $DIR/grid install flume
+  $DIR/grid install redis
+  $DIR/grid install backend-webtier
 }
 
 install_zookeeper() {
@@ -112,12 +104,58 @@ install_yarn() {
 
 install_kafka() {
   mkdir -p "$DEPLOY_ROOT_DIR"
-  install kafka $DOWNLOAD_KAFKA kafka_2.11-0.10.1.1
+  install kafka $DOWNLOAD_KAFKA kafka_2.9.1-0.8.2.0
   # have to use SIGTERM since nohup on appears to ignore SIGINT
   # and Kafka switched to SIGINT in KAFKA-1031.
   sed -i.bak 's/SIGINT/SIGTERM/g' $DEPLOY_ROOT_DIR/kafka/bin/kafka-server-stop.sh
   # in order to simplify the wikipedia-stats example job, set topic to have just 1 partition by default
   sed -i.bak 's/^num\.partitions *=.*/num.partitions=1/' $DEPLOY_ROOT_DIR/kafka/config/server.properties
+}
+
+install_flume() {
+  mkdir -p "$DEPLOY_ROOT_DIR"
+  install flume $DOWNLOAD_FLUME apache-flume-1.5.0-cdh5.4.4-bin
+  if [ -d "$DOWNLOAD_CACHE_DIR/flume-config-generator/.git" ]; then
+    pushd "$DOWNLOAD_CACHE_DIR/flume-config-generator"
+    git fetch origin
+    git reset --hard origin/master
+  else
+    pushd $DOWNLOAD_CACHE_DIR
+    git clone git@github.com:optimizely/flume-config-generator.git
+  fi
+
+  cat "$DOWNLOAD_CACHE_DIR"/flume-config-generator/configs/flume-redis-p13n-beta.conf \
+    | sed 's@/etc/flume-ng/conf/iab-whitelist.txt@../../iab-whitelist.txt@g' \
+    | sed 's@/etc/flume-ng/conf/iab-blacklist.txt@../../iab-blacklist.txt@g' \
+    | sed 's@kafkaStaging-1:9092,kafkaStaging-2:9092,kafkaStaging-3@localhost@g' \
+    | sed 's@zookeeperKafkaStaging-1:2181,zookeeperKafkaStaging-2:2181,zookeeperKafkaStaging-3@localhost@g' \
+    > $BASE_DIR/conf/flume-redis-p13n-beta.conf
+  popd
+}
+
+install_redis() {
+  mkdir -p "$DEPLOY_ROOT_DIR"
+  install redis $DOWNLOAD_REDIS redis-4.0.0
+  cd "$DEPLOY_ROOT_DIR/redis"
+  make
+  cd - > /dev/null
+}
+
+install_backend-webtier() {
+  mkdir -p "$DEPLOY_ROOT_DIR"
+  if [ -d "$DOWNLOAD_CACHE_DIR/backend-webtier/.git" ]; then
+    cd "$DOWNLOAD_CACHE_DIR/backend-webtier"
+    git fetch origin
+    git reset --hard origin/master
+  else
+    mkdir -p $DOWNLOAD_CACHE_DIR
+    cd $DOWNLOAD_CACHE_DIR
+    git clone git@github.com:optimizely/backend-webtier.git
+    cd backend-webtier
+  fi
+  cd ../
+  rm -rf "$DEPLOY_ROOT_DIR"/backend-webtier
+  mv backend-webtier "$DEPLOY_ROOT_DIR"/
 }
 
 install() {
@@ -142,11 +180,17 @@ start_all() {
   $DIR/grid start zookeeper
   $DIR/grid start yarn
   $DIR/grid start kafka
+  $DIR/grid start flume
+  $DIR/grid start redis
+  $DIR/grid start backend-webtier
 }
 
 start_all_without_yarn() {
   $DIR/grid start zookeeper
   $DIR/grid start kafka
+  $DIR/grid start flume
+  $DIR/grid start redis
+  $DIR/grid start backend-webtier
 }
 
 start_zookeeper() {
@@ -183,6 +227,44 @@ start_kafka() {
   fi
 }
 
+start_flume() {
+    if [ -f $DEPLOY_ROOT_DIR/$SYSTEM/bin/flume-ng ]; then
+      if [ -f $DEPLOY_ROOT_DIR/$SYSTEM/lib/optimizely-flume-"$OPTIMIZELY_FLUME_VERSION"-all.jar ]; then
+        echo 'optimizely-flume-"$OPTIMIZELY_FLUME_VERSION"-all.jar already downloaded'
+      else
+        aws s3 cp s3://optimizely-maven/com/optimizely/optimizely-flume/"$OPTIMIZELY_FLUME_VERSION"/optimizely-flume-"$OPTIMIZELY_FLUME_VERSION"-all.jar $DEPLOY_ROOT_DIR/$SYSTEM/lib
+      fi
+      mkdir -p $DEPLOY_ROOT_DIR/$SYSTEM/logs
+      cd $DEPLOY_ROOT_DIR/$SYSTEM
+      nohup bin/flume-ng agent -Xmx4096m -Dflume.root.logger=INFO,console -n redis_p13n_beta_agent -c conf -f $BASE_DIR/conf/flume-redis-p13n-beta.conf > logs/flume-redis-p13n-beta.log 2>&1 &
+      cd - > /dev/null
+    else
+      echo 'Flume is not installed. Run: bin/grid install flume'
+    fi
+}
+
+start_redis() {
+  if [ -f $DEPLOY_ROOT_DIR/$SYSTEM/src/redis-server ]; then
+    mkdir -p $DEPLOY_ROOT_DIR/$SYSTEM/logs
+    cd $DEPLOY_ROOT_DIR/$SYSTEM
+    nohup src/redis-server > logs/redis.log 2>&1 &
+    cd - > /dev/null
+  else
+    echo 'Redis not installed. Run bin/grid install redis'
+  fi
+}
+
+start_backend-webtier() {
+  if [ -d "$DEPLOY_ROOT_DIR/$SYSTEM/.git" ]; then
+    mkdir -p $DEPLOY_ROOT_DIR/$SYSTEM/logs
+    cd $DEPLOY_ROOT_DIR/$SYSTEM
+    nohup ./gradlew -Pargs="server log-dev.yaml" :run > logs/backend-webtier.log 2>&1 &
+    cd - > /dev/null
+  else
+    echo 'backend-webtier not installed. Run bin/grid install backend-webtier'
+  fi
+}
+
 wait_for_service() {
   local SERVICE_NAME=$1
   local PORT=$2
@@ -204,6 +286,9 @@ stop_all() {
   $DIR/grid stop kafka
   $DIR/grid stop yarn
   $DIR/grid stop zookeeper
+  $DIR/grid stop flume
+  $DIR/grid stop backend-webtier
+  $DIR/grid stop redis
 }
 
 stop_zookeeper() {
@@ -235,6 +320,18 @@ stop_kafka() {
   fi
 }
 
+stop_flume() {
+  ps -ef | grep "flume-redis\|flume-s3" | grep -v grep | tr -s " " | cut -d " " -f2 | tr "\n" " " | xargs kill -9
+}
+
+stop_redis() {
+  ps -ef | grep "src/redis-server" | grep -v grep | tr -s " " | cut -d " " -f2 | xargs kill -9
+}
+
+stop_backend-webtier() {
+  ps -ef | grep "log-dev.yaml" | grep -v grep | tr -s " " | cut -d " " -f2 | xargs kill -9
+}
+
 # Check arguments
 if [ "$COMMAND" == "bootstrap" ] && test -z "$SYSTEM"; then
   bootstrap
@@ -250,13 +347,12 @@ elif (test -z "$COMMAND" && test -z "$SYSTEM") \
   echo "  $ grid"
   echo "  $ grid bootstrap"
   echo "  $ grid standalone"
-  echo "  $ grid install [yarn|kafka|zookeeper|samza|all]"
-  echo "  $ grid start [yarn|kafka|zookeeper|all]"
-  echo "  $ grid stop [yarn|kafka|zookeeper|all]"
+  echo "  $ grid install [yarn|kafka|zookeeper|samza|flume|all]"
+  echo "  $ grid start [yarn|kafka|zookeeper|flume|redis|backend-webtier|all]"
+  echo "  $ grid stop [yarn|kafka|zookeeper|flume|redis|backend-webtier|all]"
   echo
   exit 1
 else
   echo "EXECUTING: $COMMAND $SYSTEM"
-
   "$COMMAND"_"$SYSTEM"
 fi
