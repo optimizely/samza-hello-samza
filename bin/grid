@@ -19,14 +19,7 @@
 # This script will download, setup, start, and stop servers for Kafka, YARN, and ZooKeeper,
 # as well as downloading, building and locally publishing Samza
 
-if [ -z "$JAVA_HOME" ]; then
-  if [ -x /usr/libexec/java_home ]; then
-    export JAVA_HOME="$(/usr/libexec/java_home -v 1.8.0_45)"
-  else
-    echo "JAVA_HOME not set. Exiting."
-    exit 1
-  fi
-fi
+export JAVA_HOME="$(/usr/libexec/java_home -v 1.8.0_45)"
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 BASE_DIR=$(dirname $DIR)
@@ -35,12 +28,12 @@ DOWNLOAD_CACHE_DIR=$HOME/.samza/download
 COMMAND=$1
 SYSTEM=$2
 
-DOWNLOAD_KAFKA=http://www.us.apache.org/dist/kafka/0.8.2.0/kafka_2.9.1-0.8.2.0.tgz
+DOWNLOAD_KAFKA=http://www.us.apache.org/dist/kafka/0.10.2.1/kafka_2.11-0.10.2.1.tgz
 DOWNLOAD_YARN=https://archive.apache.org/dist/hadoop/common/hadoop-2.6.1/hadoop-2.6.1.tar.gz
-DOWNLOAD_ZOOKEEPER=http://archive.apache.org/dist/zookeeper/zookeeper-3.4.3/zookeeper-3.4.3.tar.gz
+DOWNLOAD_ZOOKEEPER=http://archive.apache.org/dist/zookeeper/zookeeper-3.4.5/zookeeper-3.4.5.tar.gz
 DOWNLOAD_FLUME=http://archive.cloudera.com/cdh5/cdh/5/flume-ng-1.5.0-cdh5.4.4.tar.gz
 DOWNLOAD_REDIS=http://download.redis.io/releases/redis-4.0.0.tar.gz
-OPTIMIZELY_FLUME_VERSION=2.3.22
+OPTIMIZELY_FLUME_VERSION=2.3.41
 
 SERVICE_WAIT_TIMEOUT_SEC=20
 ZOOKEEPER_PORT=2181
@@ -88,7 +81,7 @@ install_all_without_yarn() {
 
 install_zookeeper() {
   mkdir -p "$DEPLOY_ROOT_DIR"
-  install zookeeper $DOWNLOAD_ZOOKEEPER zookeeper-3.4.3
+  install zookeeper $DOWNLOAD_ZOOKEEPER zookeeper-3.4.5
   cp "$DEPLOY_ROOT_DIR/zookeeper/conf/zoo_sample.cfg" "$DEPLOY_ROOT_DIR/zookeeper/conf/zoo.cfg"
 }
 
@@ -104,7 +97,7 @@ install_yarn() {
 
 install_kafka() {
   mkdir -p "$DEPLOY_ROOT_DIR"
-  install kafka $DOWNLOAD_KAFKA kafka_2.9.1-0.8.2.0
+  install kafka $DOWNLOAD_KAFKA kafka_2.11-0.10.2.1
   # have to use SIGTERM since nohup on appears to ignore SIGINT
   # and Kafka switched to SIGINT in KAFKA-1031.
   sed -i.bak 's/SIGINT/SIGTERM/g' $DEPLOY_ROOT_DIR/kafka/bin/kafka-server-stop.sh
@@ -115,22 +108,22 @@ install_kafka() {
 install_flume() {
   mkdir -p "$DEPLOY_ROOT_DIR"
   install flume $DOWNLOAD_FLUME apache-flume-1.5.0-cdh5.4.4-bin
-  if [ -d "$DOWNLOAD_CACHE_DIR/flume-config-generator/.git" ]; then
-    pushd "$DOWNLOAD_CACHE_DIR/flume-config-generator"
-    git fetch origin
-    git reset --hard origin/master
-  else
-    pushd $DOWNLOAD_CACHE_DIR
-    git clone git@github.com:optimizely/flume-config-generator.git
-  fi
+  # if [ -d "$DOWNLOAD_CACHE_DIR/flume-config-generator/.git" ]; then
+  #   pushd "$DOWNLOAD_CACHE_DIR/flume-config-generator"
+  #   git fetch origin
+  #   git reset --hard origin/master
+  # else
+  #   pushd $DOWNLOAD_CACHE_DIR
+  #   git clone git@github.com:optimizely/flume-config-generator.git
+  # fi
 
-  cat "$DOWNLOAD_CACHE_DIR"/flume-config-generator/configs/flume-redis-p13n-beta.conf \
-    | sed 's@/etc/flume-ng/conf/iab-whitelist.txt@../../iab-whitelist.txt@g' \
-    | sed 's@/etc/flume-ng/conf/iab-blacklist.txt@../../iab-blacklist.txt@g' \
-    | sed 's@kafkaStaging-1:9092,kafkaStaging-2:9092,kafkaStaging-3@localhost@g' \
-    | sed 's@zookeeperKafkaStaging-1:2181,zookeeperKafkaStaging-2:2181,zookeeperKafkaStaging-3@localhost@g' \
-    > $BASE_DIR/conf/flume-redis-p13n-beta.conf
-  popd
+  # cat "$DOWNLOAD_CACHE_DIR"/flume-config-generator/configs/flume-redis-p13n-beta.conf \
+  #   | sed 's@/etc/flume-ng/conf/iab-whitelist.txt@../../iab-whitelist.txt@g' \
+  #   | sed 's@/etc/flume-ng/conf/iab-blacklist.txt@../../iab-blacklist.txt@g' \
+  #   | sed 's@kafkaStaging-1:9092,kafkaStaging-2:9092,kafkaStaging-3@localhost@g' \
+  #   | sed 's@zookeeperKafkaStaging-1:2181,zookeeperKafkaStaging-2:2181,zookeeperKafkaStaging-3@localhost@g' \
+  #   > $BASE_DIR/conf/flume-redis-p13n-beta.conf
+  #popd
 }
 
 install_redis() {
@@ -236,7 +229,7 @@ start_flume() {
       fi
       mkdir -p $DEPLOY_ROOT_DIR/$SYSTEM/logs
       cd $DEPLOY_ROOT_DIR/$SYSTEM
-      nohup bin/flume-ng agent -Xmx4096m -Dflume.root.logger=INFO,console -n redis_p13n_beta_agent -c conf -f $BASE_DIR/conf/flume-redis-p13n-beta.conf > logs/flume-redis-p13n-beta.log 2>&1 &
+      nohup bin/flume-ng agent -Dflume.root.logger=INFO,console -n redis_p13n_local_agent -c conf -f $BASE_DIR/conf/flume-redis-p13n-local.conf > logs/flume-redis-p13n-local.log 2>&1 &
       cd - > /dev/null
     else
       echo 'Flume is not installed. Run: bin/grid install flume'
@@ -258,7 +251,7 @@ start_backend-webtier() {
   if [ -d "$DEPLOY_ROOT_DIR/$SYSTEM/.git" ]; then
     mkdir -p $DEPLOY_ROOT_DIR/$SYSTEM/logs
     cd $DEPLOY_ROOT_DIR/$SYSTEM
-    nohup ./gradlew -Pargs="server log-dev.yaml" :run > logs/backend-webtier.log 2>&1 &
+    nohup ./gradlew -Pargs="server log-dev-redis.yaml" server-all:run > logs/backend-webtier.log 2>&1 &
     cd - > /dev/null
   else
     echo 'backend-webtier not installed. Run bin/grid install backend-webtier'
@@ -329,7 +322,7 @@ stop_redis() {
 }
 
 stop_backend-webtier() {
-  ps -ef | grep "log-dev.yaml" | grep -v grep | tr -s " " | cut -d " " -f2 | xargs kill -9
+  ps -ef | grep "log-dev-redis.yaml" | grep -v grep | tr -s " " | cut -d " " -f2 | xargs kill -9
 }
 
 # Check arguments
