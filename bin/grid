@@ -215,7 +215,7 @@ stop_kafka() {
 }
 
 stop_flume() {
-  ps -ef | grep "flume-redis\|flume-s3" | grep -v grep | tr -s " " | cut -d " " -f2 | tr "\n" " " | xargs kill -9
+  ps -ef | grep "eflume\|flume-s3" | grep -v grep | tr -s " " | cut -d " " -f2 | tr "\n" " " | xargs kill -9
 }
 
 stop_backend-webtier() {
@@ -239,6 +239,7 @@ elif (test -z "$COMMAND" && test -z "$SYSTEM") \
   echo "  $ grid standalone"
   echo "  $ grid install [kafka|zookeeper|flume|all]"
   echo "  $ grid start [kafka|zookeeper|flume|backend-webtier|all]"
+  echo "  $ aws-okta exec main -- grid start flume"
   echo "  $ grid stop [kafka|zookeeper|flume|backend-webtier|all]"
   echo
   exit 1
